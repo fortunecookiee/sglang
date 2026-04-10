@@ -250,6 +250,10 @@ class GenerateReqInput(BaseReq):
     image_max_dynamic_patch: Optional[int] = None
     video_max_dynamic_patch: Optional[int] = None
 
+    # Pre-computed delimiter indices for multi-item scoring.
+    # Batch-level: List[List[int]] (one per request). After __getitem__: List[int].
+    multi_item_delimiter_indices: Optional[Union[List[List[int]], List[int]]] = None
+
     def contains_mm_input(self) -> bool:
         return (
             has_valid_data(self.image_data)
@@ -685,6 +689,11 @@ class GenerateReqInput(BaseReq):
             external_trace_header=self.external_trace_header,
             http_worker_ipc=self.http_worker_ipc,
             received_time=self.received_time,
+            multi_item_delimiter_indices=(
+                self.multi_item_delimiter_indices[i]
+                if self.multi_item_delimiter_indices is not None
+                else None
+            ),
         )
         cache[i] = sub
         return sub
@@ -774,6 +783,9 @@ class TokenizedGenerateReqInput(BaseReq):
     need_wait_for_mm_inputs: bool = False
     num_items_assigned: Optional[Dict[Modality, List[int]]] = None
 
+    # Pre-computed delimiter indices for multi-item scoring
+    multi_item_delimiter_indices: Optional[List[int]] = None
+
     # For observability
     time_stats: Optional[Union[APIServerReqTimeStats, DPControllerReqTimeStats]] = None
 
@@ -851,6 +863,10 @@ class EmbeddingReqInput(BaseReq):
     lora_path: Optional[Union[List[Optional[str]], Optional[str]]] = None
     # The uid of LoRA adaptors, should be initialized by tokenizer manager
     lora_id: Optional[Union[List[Optional[str]], Optional[str]]] = None
+
+    # Pre-computed delimiter indices for multi-item scoring.
+    # Batch-level: List[List[int]] (one per request). After __getitem__: List[int].
+    multi_item_delimiter_indices: Optional[Union[List[List[int]], List[int]]] = None
 
     def normalize_batch_and_arguments(self):
         # at least one of text, input_ids, or image should be provided
@@ -953,6 +969,11 @@ class EmbeddingReqInput(BaseReq):
                 lora_id=self.lora_id[i] if self.lora_id is not None else None,
                 is_cross_encoder_request=True,
                 http_worker_ipc=self.http_worker_ipc,
+                multi_item_delimiter_indices=(
+                    self.multi_item_delimiter_indices[i]
+                    if self.multi_item_delimiter_indices is not None
+                    else None
+                ),
             )
         else:
             sub = EmbeddingReqInput(
@@ -976,6 +997,11 @@ class EmbeddingReqInput(BaseReq):
                 dimensions=self.dimensions,
                 http_worker_ipc=self.http_worker_ipc,
                 received_time=self.received_time,
+                multi_item_delimiter_indices=(
+                    self.multi_item_delimiter_indices[i]
+                    if self.multi_item_delimiter_indices is not None
+                    else None
+                ),
             )
         cache[i] = sub
         return sub
@@ -1004,6 +1030,8 @@ class TokenizedEmbeddingReqInput(BaseReq):
 
     # LoRA related
     lora_id: Optional[str] = None  # None means just use the base model
+    # Pre-computed delimiter indices for multi-item scoring
+    multi_item_delimiter_indices: Optional[List[int]] = None
     # For observability
     time_stats: Optional[Union[APIServerReqTimeStats, DPControllerReqTimeStats]] = None
 

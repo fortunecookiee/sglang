@@ -167,6 +167,18 @@ PREFILL_CP_SPLIT_CHOICES = ["in-seq-split"]
 
 DEFAULT_LORA_EVICTION_POLICY = "lru"
 
+# Placeholder token ID inserted between items in Multi-Item Scoring sequences.
+# Format: query<delim>item1<delim>item2<delim>...
+#
+# This token is a structural placeholder only — delimiter *positions* are pre-computed
+# from item lengths (multi_item_delimiter_indices), not by scanning for this token ID.
+# The token must exist in the sequence so that:
+#   1. FlashInfer's attention mask can identify item boundaries,
+#   2. logprob extraction has a valid column index to read from.
+# This coupling to FlashInfer's signature is temporary and will be removed once
+# the attention backend supports position-only MIS without a sentinel token.
+MIS_DELIMITER_TOKEN_ID = 9999
+
 NSA_CHOICES = [
     "flashmla_sparse",
     "flashmla_kv",
@@ -608,10 +620,11 @@ class ServerArgs:
     offload_mode: str = "cpu"
 
     # Scoring configuration
-    # Delimiter token ID used to combine Query and Items into a single sequence for multi-item scoring.
-    # Format: Query<delimiter>Item1<delimiter>Item2<delimiter>...
-    # This enables efficient batch processing of multiple items against a single query.
-    multi_item_scoring_delimiter: Optional[Union[int]] = None
+    # Enable Multi-Item Scoring optimization. Combines query and multiple items
+    # into a single sequence for efficient batch processing. Item boundaries are
+    # determined by pre-computed delimiter indices (from item lengths), not by the
+    # placeholder token. See MIS_DELIMITER_TOKEN_ID for details.
+    enable_mis: bool = False
 
     # Optimization/debug options
     disable_radix_cache: bool = False
@@ -5602,10 +5615,12 @@ class ServerArgs:
 
         # Args for multi-item-scoring
         parser.add_argument(
-            "--multi-item-scoring-delimiter",
-            type=int,
-            default=ServerArgs.multi_item_scoring_delimiter,
-            help="Delimiter token ID for multi-item scoring. Used to combine Query and Items into a single sequence: Query<delimiter>Item1<delimiter>Item2<delimiter>... This enables efficient batch processing of multiple items against a single query.",
+            "--enable-mis",
+            action="store_true",
+            default=ServerArgs.enable_mis,
+            help="Enable Multi-Item Scoring optimization. Combines query and multiple items "
+            "into a single sequence for efficient batch processing. Requires "
+            "--attention-backend flashinfer, --disable-radix-cache, and --chunked-prefill-size -1.",
         )
 
         # Optimization/debug options
@@ -6449,14 +6464,21 @@ class ServerArgs:
                 )
 
         # Check multi-item scoring
-        if self.multi_item_scoring_delimiter is not None:
+        if self.enable_mis:
             assert self.disable_radix_cache, (
                 "Multi-item scoring requires radix cache to be disabled. "
-                "Please set --disable-radix-cache when using --multi-item-scoring-delimiter."
+                "Please set --disable-radix-cache when using --enable-mis."
             )
             assert self.chunked_prefill_size == -1, (
                 "Multi-item scoring requires chunked prefill to be disabled. "
-                "Please set --chunked-prefill-size -1 when using --multi-item-scoring-delimiter."
+                "Please set --chunked-prefill-size -1 when using --enable-mis."
+            )
+            # MIS requires flashinfer backend for custom attention mask support
+            prefill_backend, decode_backend = self.get_attention_backends()
+            assert prefill_backend == "flashinfer" and decode_backend == "flashinfer", (
+                "Multi-item scoring requires flashinfer attention backend for custom attention mask support. "
+                f"Please set --attention-backend flashinfer when using --enable-mis. "
+                f"Current backends: prefill={prefill_backend}, decode={decode_backend}"
             )
 
         # Check hisparse

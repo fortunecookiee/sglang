@@ -596,6 +596,7 @@ class Req(ReqDllmMixin):
         time_stats: Optional[
             Union[APIServerReqTimeStats, DPControllerReqTimeStats]
         ] = None,
+        multi_item_delimiter_indices: Optional[List[int]] = None,
     ):
         # Input and output info
         self.rid = rid
@@ -613,6 +614,7 @@ class Req(ReqDllmMixin):
         self.session = session
         self.input_embeds = input_embeds
         self.positional_embed_overrides = positional_embed_overrides
+        self.multi_item_delimiter_indices = multi_item_delimiter_indices
 
         # For req-level memory management
         self.kv_committed_len = 0
@@ -1433,6 +1435,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     # Whether this batch is prefill-only (no token generation needed)
     is_prefill_only: bool = False
 
+    # Multi-item scoring delimiter indices (set during prepare_for_extend)
+    multi_item_delimiter_indices: Optional[List[Optional[torch.Tensor]]] = None
+
     # hicache pointer for synchronizing data loading from CPU to GPU
     hicache_consumer_index: int = -1
 
@@ -1802,6 +1807,21 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         self.multimodal_inputs = multimodal_inputs
         self.token_type_ids = token_type_ids_tensor
         self.seq_lens_sum = sum(seq_lens)
+
+        # Pre-compute delimiter indices as CPU tensors for MIS
+        if get_global_server_args().enable_mis and any(
+            r.multi_item_delimiter_indices is not None for r in reqs
+        ):
+            self.multi_item_delimiter_indices = [
+                (
+                    torch.tensor(r.multi_item_delimiter_indices, dtype=torch.int64)
+                    if r.multi_item_delimiter_indices is not None
+                    else None
+                )
+                for r in reqs
+            ]
+        else:
+            self.multi_item_delimiter_indices = None
 
         if self.return_logprob:
             self.top_logprobs_nums = [r.top_logprobs_num for r in reqs]
@@ -2438,6 +2458,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             ),
             extend_input_logprob_token_ids=self.extend_input_logprob_token_ids,
             is_prefill_only=self.is_prefill_only,
+            multi_item_delimiter_indices=self.multi_item_delimiter_indices,
             dimensions=self.dimensions,
             dllm_block_offsets=[req.dllm_block_offset for req in self.reqs],
             dllm_config=self.dllm_config,
@@ -2624,6 +2645,9 @@ class ModelWorkerBatch:
 
     # Whether this batch is prefill-only (no token generation needed)
     is_prefill_only: bool = False
+
+    # Pre-computed delimiter indices for multi-item scoring (CPU tensors, one per request)
+    multi_item_delimiter_indices: Optional[List[Optional[torch.Tensor]]] = None
 
     # Diffusion LLM
     dllm_block_offsets: Optional[List[int]] = None
